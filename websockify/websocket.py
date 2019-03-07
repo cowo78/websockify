@@ -18,10 +18,16 @@ import email
 import errno
 import random
 import socket
-import ssl
 import struct
 from base64 import b64encode
 from hashlib import sha1
+
+try:
+    import ssl
+except ImportError:
+    import warnings
+    warnings.warn("no 'ssl' module, SSL sockets will not be available")
+    ssl = None
 
 try:
     import numpy
@@ -151,8 +157,11 @@ class WebSocket(object):
             self.socket = socket.create_connection((uri.hostname, port))
 
             if uri.scheme in ("wss", "https"):
-                self.socket = ssl.wrap_socket(self.socket)
-                self._state = "ssl_handshake"
+                if ssl:
+                    self.socket = ssl.wrap_socket(self.socket)
+                    self._state = "ssl_handshake"
+                else:
+                    raise Exception("'%s' scheme required, but SSL module not available" % uri.scheme)
             else:
                 self._state = "headers"
 

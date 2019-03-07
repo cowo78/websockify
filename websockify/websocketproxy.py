@@ -11,7 +11,13 @@ as taken from http://docs.python.org/dev/library/ssl.html#certificates
 
 '''
 
-import signal, socket, optparse, time, os, sys, subprocess, logging, errno, ssl
+import signal, socket, optparse, time, os, sys, subprocess, logging, errno
+
+try:
+    import ssl
+except ImportError:
+    ssl = None
+
 try:
     from socketserver import ThreadingMixIn
 except ImportError:
@@ -46,15 +52,15 @@ Traffic Legend:
     <  - Client send
     <. - Client send partial
 """
-    
+
     def send_auth_error(self, ex):
         self.send_response(ex.code, ex.msg)
         self.send_header('Content-Type', 'text/html')
         for name, val in ex.headers.items():
             self.send_header(name, val)
-        
+
         self.end_headers()
-    
+
     def validate_connection(self):
         if not self.server.token_plugin:
             return
@@ -83,7 +89,7 @@ Traffic Legend:
         except (TypeError, AttributeError, KeyError):
             # not a SSL connection or client presented no certificate with valid data
             pass
-            
+
         try:
             self.server.auth_plugin.authenticate(
                 headers=self.headers, target_host=self.server.target_host,
@@ -280,6 +286,8 @@ class WebSocketProxy(websockifyserver.WebSockifyServer):
         self.wrap_mode      = kwargs.pop('wrap_mode', None)
         self.unix_target    = kwargs.pop('unix_target', None)
         self.ssl_target     = kwargs.pop('ssl_target', None)
+        if self.ssl_target and not ssl:
+            raise Exception("Trying to initialize an SSL-enabled WebSocketProxy but no SSL module found")
         self.heartbeat      = kwargs.pop('heartbeat', None)
 
         self.token_plugin = kwargs.pop('token_plugin', None)
@@ -393,36 +401,38 @@ def _subprocess_setup():
     # non-Python successfulbprocesses expect.
     signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 
-
-try :
-    # First try SSL options for Python 3.4 and above
-    SSL_OPTIONS = {
-        'default': ssl.OP_ALL,
-        'tlsv1_1': ssl.PROTOCOL_TLS | ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 |
-        ssl.OP_NO_TLSv1,
-        'tlsv1_2': ssl.PROTOCOL_TLS | ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 |
-        ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1,
-        'tlsv1_3': ssl.PROTOCOL_TLS | ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 |
-        ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1 | ssl.OP_NO_TLSv1_2,
-    }
-except AttributeError:
-    try:
-        # Python 3.3 uses a different scheme for SSL options
-        # tlsv1_3 is not supported on older Python versions
+if ssl:
+    try :
+        # First try SSL options for Python 3.4 and above
         SSL_OPTIONS = {
             'default': ssl.OP_ALL,
-            'tlsv1_1': ssl.PROTOCOL_TLSv1 | ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 |
+            'tlsv1_1': ssl.PROTOCOL_TLS | ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 |
             ssl.OP_NO_TLSv1,
-            'tlsv1_2': ssl.PROTOCOL_TLSv1 | ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 |
+            'tlsv1_2': ssl.PROTOCOL_TLS | ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 |
             ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1,
+            'tlsv1_3': ssl.PROTOCOL_TLS | ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 |
+            ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1 | ssl.OP_NO_TLSv1_2,
         }
     except AttributeError:
-        # Python 2.6 does not support TLS v1.2, and uses a different scheme
-        # for SSL options
-        SSL_OPTIONS = {
-            'default': ssl.PROTOCOL_SSLv23,
-            'tlsv1_1': ssl.PROTOCOL_TLSv1,
-        }
+        try:
+            # Python 3.3 uses a different scheme for SSL options
+            # tlsv1_3 is not supported on older Python versions
+            SSL_OPTIONS = {
+                'default': ssl.OP_ALL,
+                'tlsv1_1': ssl.PROTOCOL_TLSv1 | ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 |
+                ssl.OP_NO_TLSv1,
+                'tlsv1_2': ssl.PROTOCOL_TLSv1 | ssl.OP_NO_SSLv2 | ssl.OP_NO_SSLv3 |
+                ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1,
+            }
+        except AttributeError:
+            # Python 2.6 does not support TLS v1.2, and uses a different scheme
+            # for SSL options
+            SSL_OPTIONS = {
+                'default': ssl.PROTOCOL_SSLv23,
+                'tlsv1_1': ssl.PROTOCOL_TLSv1,
+            }
+else:
+    SSL_OPTIONS = {}
 
 def select_ssl_version(version):
     """Returns SSL options for the most secure TSL version available on this
@@ -433,7 +443,7 @@ def select_ssl_version(version):
         # It so happens that version names sorted lexicographically form a list
         # from the least to the most secure
         keys = list(SSL_OPTIONS.keys())
-        keys.sort() 
+        keys.sort()
         fallback = keys[-1]
         logger = logging.getLogger(WebSocketProxy.log_prefix)
         logger.warn("TLS version %s unsupported. Falling back to %s",
@@ -571,10 +581,10 @@ def websockify_init():
     if opts.legacy_syslog and not opts.syslog:
         parser.error("You must use --syslog to use --legacy-syslog")
 
+    if ssl:
+        opts.ssl_options = select_ssl_version(opts.ssl_version)
 
-    opts.ssl_options = select_ssl_version(opts.ssl_version)
     del opts.ssl_version
-
 
     if opts.log_file:
         # Setup logging to user-specified file.
